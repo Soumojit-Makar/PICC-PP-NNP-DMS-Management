@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DMS Terminal</title>
+<link href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #eee; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; flex-direction: column; }
+h1 { padding: 12px 20px; font-size: 16px; background: #16213e; border-bottom: 1px solid #0f3460; }
+h1 span { color: #e94560; }
+#auth-form { max-width: 500px; margin: 60px auto; padding: 30px; background: #16213e; border-radius: 8px; }
+#auth-form h2 { margin-bottom: 20px; font-size: 18px; }
+#auth-form label { display: block; margin: 10px 0 4px; font-size: 13px; color: #aaa; }
+#auth-form textarea, #auth-form input { width: 100%; padding: 10px; background: #0f3460; border: 1px solid #1a3a6a; color: #eee; border-radius: 4px; font-family: monospace; }
+#auth-form textarea { min-height: 120px; resize: vertical; }
+#auth-form button { margin-top: 16px; padding: 10px 24px; background: #e94560; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+#auth-form button:hover { background: #c73650; }
+#auth-form .error { color: #e94560; margin-top: 10px; font-size: 13px; }
+#terminal-container { flex: 1; display: none; padding: 4px; }
+#status-bar { display: none; padding: 6px 20px; font-size: 12px; background: #16213e; color: #888; border-top: 1px solid #0f3460; }
+#status-bar .connected { color: #4ecca3; }
+</style>
+</head>
+<body>
+
+<h1>NNP <span> DMS Terminal</span></h1>
+
+<div id="auth-form" style="display:none;">
+  <h2>SSH Authentication</h2>
+  <p style="margin-bottom:16px;color:#aaa;font-size:13px;">Connect via deployment credentials or enter SSH key if expired</p>
+  <label>Private Key (optional if cached)</label>
+  <textarea id="privateKey" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"></textarea>
+  <label>Passphrase (optional)</label>
+  <input type="password" id="passphrase" placeholder="Enter passphrase if key is encrypted">
+  <button onclick="connectWithForm()">Connect</button>
+  <div id="auth-error" class="error"></div>
+</div>
+
+<div id="terminal-container"></div>
+<div id="status-bar">Status: <span id="status-text">disconnected</span></div>
+
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+<script>
+const params = new URLSearchParams(window.location.search);
+const deploymentId = params.get('deploymentId') || window.location.pathname.split('/').pop();
+const term = new Terminal({ cursorBlink: true, fontSize: 14, fontFamily: "'Cascadia Code','Fira Code',monospace", theme: { background: '#0d1117', cursor: '#e94560' } });
+const fitAddon = new FitAddon.FitAddon();
+let ws = null;
+let termOpened = false;
+
+// Global terminal listeners (registered only once)
+term.onData(function(data) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(data);
+  }
+});
+
+window.addEventListener('resize', function() {
+  if (termOpened) fitAddon.fit();
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+  }
+});
+
+function buildWsUrl() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const pageDir = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/'));
+  return protocol + '//' + location.host + pageDir + '/terminal/' + deploymentId;
+}
+
+function startTerminal(authData) {
+  if (ws) {
+    try { ws.close(); } catch(e){}
+  }
+  document.getElementById('auth-error').textContent = '';
+  const wsUrl = buildWsUrl();
+  ws = new WebSocket(wsUrl);
+
+  ws.onopen = function() {
+    document.getElementById('auth-form').style.display = 'none';
+    document.getElementById('terminal-container').style.display = 'block';
+    document.getElementById('status-bar').style.display = 'block';
+    document.getElementById('status-text').textContent = 'connecting...';
+
+    if (!termOpened) {
+      term.loadAddon(fitAddon);
+      term.open(document.getElementById('terminal-container'));
+      fitAddon.fit();
+      term.focus();
+      termOpened = true;
+    }
+
+    ws.send(JSON.stringify(authData));
+  };
+
+  ws.onmessage = function(event) {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'info') {
+        document.getElementById('status-text').innerHTML = '<span class="connected">connected to ' + msg.data.replace('Connected to ','') + '</span>';
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+        }
+      } else if (msg.type === 'stdout') {
+        term.write(msg.data);
+      } else if (msg.type === 'error') {
+        document.getElementById('status-text').textContent = 'error: ' + msg.data;
+        document.getElementById('auth-form').style.display = 'block';
+        document.getElementById('auth-error').textContent = msg.data;
+      }
+    } catch(e) {
+      term.write(event.data);
+    }
+  };
+
+  ws.onclose = function() {
+    document.getElementById('status-text').textContent = 'disconnected';
+    if (document.getElementById('terminal-container').style.display !== 'none') {
+      term.write('\r\n\x1b[31m[connection closed]\x1b[0m\r\n');
+    }
+  };
+}
+
+function connectWithForm() {
+  const pk = document.getElementById('privateKey').value.trim();
+  const pass = document.getElementById('passphrase').value;
+  const authPayload = pk ? { privateKey: pk, passphrase: pass } : {};
+  startTerminal(authPayload);
+}
+
+// Auto connect using cached SSH key on load
+window.onload = function() {
+  startTerminal({});
+};
+</script>
+</body>
+</html>
