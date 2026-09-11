@@ -1,0 +1,60 @@
+services:
+  dms-management:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: picc-pp-nnp-dms-management:latest
+    container_name: dms-management
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    environment:
+      - SERVER_PORT=${SERVER_PORT:-8080}
+      - SERVER_SERVLET_CONTEXT_PATH=${SERVER_SERVLET_CONTEXT_PATH:-/api/dms}
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-local}
+      - GIT_REPOSITORY_URL=${GIT_REPOSITORY_URL:-https://gitlab.example.com/bigdata-management/deployment/dms-deploy-script.git}
+      - GIT_REPOSITORY_BRANCH=${GIT_REPOSITORY_BRANCH:-main}
+      - GIT_REPOSITORY_USERNAME=${GIT_REPOSITORY_USERNAME:-devops}
+      - GIT_REPOSITORY_TOKEN=${GIT_REPOSITORY_TOKEN:-}
+      - SPRING_DATASOURCE_URL=${SPRING_DATASOURCE_URL:-jdbc:postgresql://postgres:5432/nnp-core-comp}
+      - SPRING_DATASOURCE_USERNAME=${SPRING_DATASOURCE_USERNAME:-postgres}
+      - SPRING_DATASOURCE_PASSWORD=${SPRING_DATASOURCE_PASSWORD:-postgres}
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=${SPRING_JPA_HIBERNATE_DDL_AUTO:-update}
+      - SPRING_JPA_DEFAULT_SCHEMA=${SPRING_JPA_DEFAULT_SCHEMA:-portal}
+      - DEPLOYMENT_HEALTH_PORT=${DEPLOYMENT_HEALTH_PORT:-9099}
+      - DEPLOYMENT_DISK_THRESHOLD=${DEPLOYMENT_DISK_THRESHOLD:-80}
+      - DEPLOYMENT_SCHEDULER_CRON=${DEPLOYMENT_SCHEDULER_CRON:-0 */5 * * * *}
+      - DMS_SSH_KEY_TTL_MINUTES=${DMS_SSH_KEY_TTL_MINUTES:-60}
+      - DMS_SSH_KEY_PURGE_DELAY_MS=${DMS_SSH_KEY_PURGE_DELAY_MS:-60000}
+      - DMS_SSH_CONNECT_TIMEOUT_MS=${DMS_SSH_CONNECT_TIMEOUT_MS:-10000}
+      - CONFIG_SERVER_URL=${CONFIG_SERVER_URL:-http://localhost:8888}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/actuator/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 25s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: dms-postgres
+    environment:
+      POSTGRES_DB: nnp-core-comp
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - dms_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d nnp-core-comp" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  dms_pgdata:
